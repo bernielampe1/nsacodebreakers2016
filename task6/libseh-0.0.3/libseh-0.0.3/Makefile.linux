@@ -1,0 +1,28 @@
+
+BUILD_DIR ?= build
+CC ?= gcc -m32
+CXX ?= g++ -m32
+AS ?= as
+AR ?= ar
+
+OSNAME := linux
+ARCHNAME := ix86
+
+CFLAGS := -O2 -Wall -std=c99 -fno-strict-aliasing $(CFLAGS_ADD) -m32
+CXXFLAGS := -O2 -Wall $(CXXFLAGS_ADD) $(CFLAGS_ADD) -m32
+ASFLAGS := -xassembler-with-cpp
+
+OBJS := $(BUILD_DIR)/common.o \
+        $(BUILD_DIR)/sehpp.o \
+        $(BUILD_DIR)/tree.o \
+        $(BUILD_DIR)/seh-support.o \
+        $(BUILD_DIR)/seh.o
+
+TARGETS = $(BUILD_DIR)/libseh.a
+
+all: $(TARGETS)
+
+
+include rules.mk
+
+        	

@@ -1,0 +1,17 @@
+    int vm_mem[0x200];
+
+    if (10 bad commands) arm and trigger
+    else dispatch()
+
+    int dispatch()
+    {
+        /* check all argument pointers are valid */
+        /* if command len % 3 == 0 then fail */
+        /* case 1: get the hardware status DWORD */
+        /* case 2: get hardware serial in normal mode */
+        /* case 3: disarm and change from normal to testing mode if debugger is not attached */
+        /* case 4: change mode from testing to normal mode and get status DWORD */
+        /* case 5: run the vm in testing mode with our instrs */
+        /* case 6: run the vm in normal mode and write to hardware (normal path) */
+    }
+

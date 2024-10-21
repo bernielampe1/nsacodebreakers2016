@@ -1,0 +1,13 @@
+
+Changes:
+
+v0.0.3:
+	* Apparently, the previous change to the positioning of __label__
+      declarations broke compatibility with GCC 3.x.  
+
+v0.0.2:
+	* Apparently GCC 4.x treats __label__ statements differently, which would not allow the test
+	  programs to compile.  This has been fixed.
+
+v0.0.1:
+	* Initial public release.

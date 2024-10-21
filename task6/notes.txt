@@ -1,0 +1,207 @@
+0) The stack is executable, must be a stack overflow somewhere.
+
+1) fork and ptrace parent and child exits 1 on failure to ptrace.
+    -- subverted with LD_PRELOAD (they didn't check this, but people do)
+
+2) Bad instructions in the disassembly for objdump and ida.
+    The code at 0x2e29 and 0x2e2f in libdriver.so does a pop eax, add (6 or 9) then jmp eax. This misaligns the disassembly. Fixed by patching all places those are called with nops, then changing to code.
+
+3) Suspect signal handlers are swallowing all signals to block debugging. Uses libseh-0.0.3.
+    4(SIGILL), 5(SIGTRAP), 7(SIGFPE), 8(SIGFPE), 11(SIGSEGV) signal numbers are handled by the function at 0x3b40 in libdriver.so
+    - sa_mask set to the following
+    #define SA_SIGINFO    4      /* Invoke signal-catching function with three arguments instead of one.  */
+    # define SA_NODEFER   0x40000000 /* Don't automatically block the signal when its handler is being executed.  */
+    -- Signal handlers are used in the dispatch routine to obfuscate the code
+
+4) What is written to the serial device via the unix domain socket?
+    (DWORD)0x1, (DWORD)0x13600, <status DWORD>
+
+5) At driver_ioctl call, arg1 is a ptr to a ptr that has the command.
+             == 0 (is valid too)
+   disarm    == 0x38b9f801 = 951711745
+   arm       == 0x38b9f802 = 951711746
+   trigger   == 0x38b9f803 = 951711747
+   getstate  == 0x38b9f804 = 951711748
+   getserial == 0x38b9f805 = 951711749 (found it)
+
+   raw == <number> <hex bytes up to 0x3ff-4 in len>
+   raw -2071755727 // will disarm
+
+   -- input buffer is a 4 byte command word followed by a raw buffer of hex bytes (using raw).
+   -- input buffer must not be a power of 3 length or dispatch routine will return -1
+       --- use this where we can have 10 failed commands
+
+6) 10 failed commands in a row will then run arm and trigger
+
+7) hwsim reads 12 bytes at a time from the pty. the first DWORD == 0x1, the second DWORD == 0x13600 and the third DWORD must be the hw check status and update code.
+
+8) dispatch code remade
+|buf_ptr_ptr| -> |buf_ptr| -> |data|
+
+    define isptrvalid(ptrname) try { static void* ptrname#global = *ptrname; \
+                                     ptrname#global = settonull(ptrname#global); } \
+                               catch { return -1; }
+
+    int byte_8180[0x200]; // 0x800 bytes (half instr, half data)
+    int dispatch(char **buf_ptr_ptr, int buf_len, *rtn_ptr)
+    {
+        if (!isvalidptr(buf_ptr_ptr) || !isvalidptr(*buf_ptr_ptr) || !isvalidptr(rtn_ptr))
+            return -1;
+
+        if (buf_len % 3 == 0)
+            return -1;
+
+        int *buf_ptr = *buf_ptr_ptr;
+        int cmd = *buf_ptr;
+        *buf_ptr_ptr = NULL;
+        *rtn_ptr = 0;
+
+        /**************** get the hardware status DWORD **********************/
+        if (cmd == 0) {
+            int *ret_buf = malloc(4);
+            if (write_to_serial([0, 0x13600, ret_buf])) return -1;
+            byte_8180[0x200] = *ret_buf;
+            return 1;
+        }
+
+       /**************** get hardware serial DWORD in normal mode **********************/
+        if (cmd == 0x38B9F805) {
+            if (in_testing_mode) return -1;
+
+            int *ret_buf = malloc(4);
+            if (write_to_serial([0, 0x5F32A800, rtn_buf]) return -1;
+            *rtn_ptr = *rtn_buf;
+            return 1;
+        }
+
+        /***** disarm and change from normal to testing mode if debugger is not attached *****/
+        if (cmd == -2071755727) {
+            if (in_testing_mode) return -1;
+
+            if ((result = dispatch(0x38b9f801, 4, &stack_loc)) == 1) { // disarm
+                //** mode switcher if debugger not attached
+                in_testing_mode = 0xffffff00  * check_if_debugger () | &unk_7888;
+                return result;
+            }
+        }
+
+        /***** change mode from testing to normal mode and get status DWORD *****/
+        if (cmd == -2071755728) {
+            if (!in_testing_mode) return -1
+
+            in_testing_mode = NULL;
+
+            int *ret_buf = malloc(4);
+            if (write_to_serial([0, 0x13600, rtn_buf]) return -1;
+            byte_8180[0x200] = *ret_buf;
+            return 1;
+        }
+
+        /***** run the vm in testing mode with our instrs *****/
+        if (cmd == -2073459836) {
+            if (!in_testing_mode) return -1;
+
+            int *ret_buf = malloc(4);
+            int len = buf_len;
+            if (buf_len - 4 > 0x400)
+                len = 0x400;
+            memcpy(byte_8180, **(buf_ptr_ptr+1) len);
+            run_vm(0, 0);
+        }
+
+        /***** run the vm in normal mode and write to hardware *****/
+        /**************** normal path for regular/preprogrammed commands ****************/
+        {
+            if (in_testing_mode) return -1;
+
+            memset(byte_8180, 0, 0x400);
+            memcpy(byte_8180, off_7464, off_7460);
+
+            int result = run_vm(cmd, byte_8180[0x200]);
+            if (result == -1) {
+                int *ret_buf = malloc(4);
+                memset(byte_8180, 0, 0x400);
+                memcpy(byte_8180, off_7884, off_7880);
+                run_vm(byte_8180[0x200], 0);
+                *rtn_ptr = ret_buf;
+                return 1;
+            }
+
+            memset(byte_8180, 0, 0x400);
+            run_length_decode(byte_8180, unk_7D60);
+            result = run_vm(result, byte_8180[0x200]);
+            if (result == 1) {
+                int *ret_buf = malloc(4);
+
+                / ********** only place to mode hw in code **********/
+                if (write_to_serial([1, 0x13600, rtn_buf] != 0) return -2;
+                if (write_to_serial([0, 0x13600, rtn_buf] != 0) return -2;
+
+                byte_8180[0x200] = *rtn_buf;
+                return 1;
+            }
+        }
+    }
+
+9) Testing mode
+    -- to get into testing mode, run the script before attaching a debugger. the function at 0x2db8
+       will return 0 if no debugger is attached and 1 if a debugger is attached.
+    -- patch out those bytes
+
+10) Virtual machine
+    -- runs at most 0x3e8 instructions
+    -- inc_a1 is the most present function in the list
+
+11) hw status dword states
+    3th byte is cmd
+    2st byte is trigger
+    1nd byte is armed
+    0rd byte is disarm
+
+12) exploit idea
+    -- other commands to get dword into the memory space
+    -- raw -2071755727 (switch to debug mode)
+    -- raw -2073459836 <MAGIC HEX STUFF HERE> (run the VM and find exploitable bug here)
+    -- 10 bad commands
+
+13) assembly
+0c => *(m+1) = *m << *(m+1), m++
+23 => *(m+1) = *m >> *(m+1), m++
+17 => *(m+1) = *m & *(m+1), m++
+19 => *(m+1) = *m | *(m+1), m++
+57 => *(m+1) = *m ^ *(m+1), m++
+60 => *(m+1) = *m + *(m+1), m++
+a4 => *(m+1) = *m - *(m+1), m++
+bc => *(m+1) = *m * *(m+1), m++
+b8 => instr = *m, m++
+bb => *m = ~*m
+1e => *(m-1) = *(m+1), m--
+7d => *(m-1) = *m, m--
+74 <dword> => *(m-1) = <dword>, m--
+62 <offset byte> => *m = instr, instr+=offset, m--
+95 => *m /= *(m+1), *(m+1) = *m % *(m+1)
+7a <offset byte> => if *m != 0; then instr+=2 else, instr+=offset
+90 => m = m++
+a9 => *m = *(m+1), *(m+1) = *m
+ab <offset byte> => *(m-1) = *(m + offset), m--
+
+                                        |   |
+| dword | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | y |
+                                ^       |   |
+0) advance m, m=p8
+1) put 0x10 into p7, m=p7
+2) put 0x0000ff00 -> p6, m=p6
+3) copy dword -> p5, m=p5
+4) and p6 = p5 & p6, m=p6
+5) shift p7 = p6 << p7, m=p7
+6) add p8 = p7 + p8, m=p8
+7) decrement m by 6 positions, m=p2
+8) put 0x00ffffff into p1, m=p1
+9) decrement m, m=p0
+10) and p1 = p0 & p1, m=p1
+11) advance m 7 positions, m=p8
+12) copy p1 -> p7, m=p7
+13) or p8 = p7 | p8, m=p8
+14) div p8 = p8 / y, y=p8 % y
+15) exit 00
+

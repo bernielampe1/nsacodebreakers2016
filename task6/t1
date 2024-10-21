@@ -1,0 +1,105 @@
+* 10 failed commands in a row will then run arm and trigger without mode switch
+
+* dispatch code remade
+
+    define isptrvalid(ptrname) try { static void* ptrname#global = *ptrname; \
+                                     ptrname#global = settonull(ptrname#global); } \
+                               catch { return -1; }
+
+    int vm_mem[0x200]; // 0x800 bytes (half instr, half data)
+
+    int dispatch(char **buf_ptr_ptr, int buf_len, *rtn_ptr)
+    {
+        if (!isvalidptr(buf_ptr_ptr) || !isvalidptr(*buf_ptr_ptr) || !isvalidptr(rtn_ptr)) return -1;
+
+        if (buf_len % 3 == 0) return -1;
+
+        // <snip> //
+
+        /**************** get the hardware status DWORD **********************/
+        if (cmd == 0) {
+            int *ret_buf = malloc(4);
+            if (write_to_serial([0, 0x13600, ret_buf])) return -1;
+            vm_mem[0x200] = *ret_buf;
+            return 1;
+        }
+
+       /**************** get hardware serial DWORD in normal mode **********************/
+        if (cmd == 0x38B9F805) {
+            if (in_testing_mode) return -1;
+
+            int *ret_buf = malloc(4);
+            if (write_to_serial([0, 0x5F32A800, rtn_buf]) return -1;
+            *rtn_ptr = *rtn_buf;
+            return 1;
+        }
+
+        /***** disarm and change from normal to testing mode if debugger is not attached *****/
+        if (cmd == -2071755727) {
+            if (in_testing_mode) return -1;
+
+            if ((result = dispatch(0x38b9f801, 4, &stack_loc)) == 1) { // disarm
+                //** mode switcher if debugger not attached
+                in_testing_mode = 0xffffff00  * check_if_debugger () | &unk_7888;
+                return result;
+            }
+        }
+
+        /***** change mode from testing to normal mode and get status DWORD *****/
+        if (cmd == -2071755728) {
+            if (!in_testing_mode) return -1
+
+            in_testing_mode = NULL;
+
+            int *ret_buf = malloc(4);
+            if (write_to_serial([0, 0x13600, rtn_buf]) return -1;
+            vm_mem[0x200] = *ret_buf;
+            return 1;
+        }
+
+        /***** run the vm in testing mode with our instrs *****/
+        if (cmd == -2073459836) {
+            if (!in_testing_mode) return -1;
+
+            int *ret_buf = malloc(4);
+            int len = buf_len;
+            if (buf_len - 4 > 0x400)
+                len = 0x400;
+            memcpy(vm_mem, **(buf_ptr_ptr+1) len);
+            run_vm(0, 0);
+        }
+
+        /***** run the vm in normal mode and write to hardware *****/
+        /**************** normal path for regular/preprogrammed commands ****************/
+        {
+            if (in_testing_mode) return -1;
+
+            memset(vm_mem, 0, 0x400);
+            memcpy(vm_mem, off_7464, off_7460);
+
+            int result = run_vm(cmd, vm_mem[0x200]);
+            if (result == -1) {
+                int *ret_buf = malloc(4);
+                memset(vm_mem, 0, 0x400);
+                memcpy(vm_mem, off_7884, off_7880);
+                run_vm(vm_mem[0x200], 0);
+                *rtn_ptr = ret_buf;
+                return 1;
+            }
+
+            memset(vm_mem, 0, 0x400);
+            run_length_decode(vm_mem, unk_7D60);
+            result = run_vm(result, vm_mem[0x200]);
+            if (result == 1) {
+                int *ret_buf = malloc(4);
+
+                / ********** only place to mode hw in code **********/
+                if (write_to_serial([1, 0x13600, rtn_buf] != 0) return -2;
+                if (write_to_serial([0, 0x13600, rtn_buf] != 0) return -2;
+
+                vm_mem[0x200] = *rtn_buf;
+                return 1;
+            }
+        }
+    }
+

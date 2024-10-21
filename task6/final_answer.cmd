@@ -1,0 +1,17 @@
+getserial
+getstate
+arm
+disarm
+trigger
+raw -2071755727
+raw -2073459836 9074100000007400ff0000abfa170c60abffabffabffabffabffabff74ffffff00abff1790909090909090abf9199500
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111
+raw 11 1111

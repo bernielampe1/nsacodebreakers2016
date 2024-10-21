@@ -1,0 +1,15 @@
+#!/usr/bin/expect
+
+spawn ./client
+expect ">"
+send "arm\n"
+expect ":"
+
+for {set i 1} {$i < 999999} {incr i 1} {
+    send "$i\n"
+    expect { 
+        #"Enter OTP for '767936614'" { }
+        "Enter OTP for '1780114907'" { }
+        "SUCCESS!" { break }
+    }
+}
